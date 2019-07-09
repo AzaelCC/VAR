@@ -1,0 +1,430 @@
+---
+title: "Práctica VAR"
+author: 
+- "Azael Carrillo Cabrera"
+- "Profesor: Dr. Gustavo Cabrera González"
+output:
+  html_notebook: 
+    code_folding: hide
+    theme: yeti
+---
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(reshape2)
+library(dplyr)
+library(readxl)
+library(knitr)
+library(kableExtra)
+
+```
+`r options(scipen=999)`
+###Extraemos los datos y los preparamos:
+```{r}
+btc <- read_excel("ex_parcial1_bitcoin_MCMC (3).xlsx", 
+                  col_types = c("date", "numeric", "numeric"))
+btc$Time<- as.POSIXct(btc$Time, format="%m/%d/%Y %I:%M:%S%p")
+colnames(btc)[1] <- "time"
+
+btc = btc %>%
+  mutate(cre.price = 100*(price-lag(price))/lag(price), cre.volume = 100*(volume-lag(volume))/lag(volume))
+
+btc = btc %>%
+  mutate(cre.priceL1 = lag(cre.price), cre.priceL2 = lag(cre.price, n = 2), cre.priceL3 = lag(cre.price, n = 3), cre.priceL4 = lag(cre.price, n = 4), cre.priceL5 = lag(cre.price, n = 5), cre.volumeL1 = lag(cre.volume, n = 1), cre.volumeL2 = lag(cre.volume, n = 2), cre.volumeL3 = lag(cre.volume, n = 3), cre.volumeL4 = lag(cre.volume, n = 4), cre.volumeL5 = lag(cre.volume, n = 5))
+
+kable(head(btc, 7) ,escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(1, width = "2cm")
+```
+##Primera Parte  
+###Sistema de dos ecuciones endógenas  
+$y_1:Volumen(\%)$  
+$y_2:Precio (rendimiento\ \%)$  
+$y_{1t}=c_1+\beta_{11}y_{1t-1}+\beta_{12}y_{2t-1}+\epsilon_{1t}$  
+$y_{2t}=c_2+\beta_{21}y_{1t-1}+\beta_{22}y_{2t-1}+\epsilon_{2t}$  
+
+###1) Estimación individual, ecuación por ecuación
+
+```{r}
+fit1 <- lm(cre.volume ~ cre.volumeL1 + cre.priceL1, data = btc)
+fit2 <- lm(cre.price ~ cre.volumeL1 + cre.priceL1, btc)
+
+summary(fit1)
+summary(fit2)
+```
+
+###2) Quién afecta a quién?
+$H0:\beta_{12}=0$  
+Vemos que $\beta_{12}$ sí es significativo. Es decir, el cambio porcentual del precio del periodo anterior sí afecta el volumen
+$H0:\beta_{21}=0$  
+Por otro lado, $\beta_{21}$ no es significativo por si solo; el cambio porcentual del volumen del periodo anterior no afecta al precio
+
+###3) Respuesta a los shocks
+```{r}
+sum1 <- summary(fit1) 
+varFit1 <- sum1$sigma
+##varFit1 <- sqrt(mean(sum1$residuals^2))
+sum2 <- summary(fit2) 
+varFit2 <- sum2$sigma
+##varFit2 <- sqrt(mean(sum2$residuals^2))
+```
+
+####a) Shocks del volumen  
+$y_{1T+1}= \sigma_1, y_{2T+1}=0$
+```{r}
+shockSig <- data.frame(volE = varFit1, priE = 0, volE2 = 0, priE2 = varFit2, index = 1)
+no <- 9
+for (i in 1:no) {
+shockSig[i+1, "volE"] <- sum1$coefficients["(Intercept)", 1] + sum1$coefficients["cre.volumeL1", 1]*shockSig$volE[i] + sum1$coefficients["cre.priceL1", 1]*shockSig$priE[i]
+
+shockSig[i+1, "priE"] <- sum2$coefficients["(Intercept)", 1] + sum2$coefficients["cre.volumeL1", 1]*shockSig$volE[i] + sum2$coefficients["cre.priceL1", 1]*shockSig$priE[i]
+shockSig$index[i+1] <-i+1
+}
+```
+
+####b) Shocks del precio  
+$y_{1T+1}= 0, y_{2T+1}=\sigma_2$  
+```{r}
+for (i in 1:no) {
+shockSig[i+1, "volE2"] <- sum1$coefficients["(Intercept)", 1] + sum1$coefficients["cre.volumeL1", 1]*shockSig$volE2[i] + sum1$coefficients["cre.priceL1", 1]*shockSig$priE2[i]
+
+shockSig[i+1, "priE2"] <- sum2$coefficients["(Intercept)", 1] + sum2$coefficients["cre.volumeL1", 1]*shockSig$volE2[i] + sum2$coefficients["cre.priceL1", 1]*shockSig$priE2[i]
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shockSig, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+
+###4) Grafica los 4 resultados anteriors y analiza cuál efecto cruzado es mayor?
+
+```{r}
+shSMelt <- melt(shockSig[,1:5], id.vars = "index")
+ggplot(shSMelt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+  
+###5) Repite el 3 y 4  
+
+####a)$y_{1T+1}= 1, y_{2T+1}= 0$
+```{r}
+shocks1 <- data.frame(volE = 1, priE = 0, volE2 = 0, priE2 = 1, index = 1)
+no <- 9
+for (i in 1:no) {
+shocks1[i+1, "volE"] <- sum1$coeff["(Intercept)", 1] + sum1$coeff["cre.volumeL1", 1]*shocks1$volE[i] + sum1$coeff["cre.priceL1", 1]*shocks1$priE[i]
+
+shocks1[i+1, "priE"] <- sum2$coeff["(Intercept)", 1] + sum2$coeff["cre.volumeL1", 1]*shocks1$volE[i] + sum2$coeff["cre.priceL1", 1]*shocks1$priE[i]
+shocks1$index[i+1] <-i+1
+}
+```
+
+####b)$y_{1T+1}= 1, y_{2T+1}= 1$
+```{r}
+for (i in 1:no) {
+shocks1[i+1, "volE2"] <- sum1$coeff["(Intercept)", 1] + sum1$coeff["cre.volumeL1", 1]*shocks1$volE2[i] + sum1$coeff["cre.priceL1", 1]*shocks1$priE2[i]
+
+shocks1[i+1, "priE2"] <- sum2$coeff["(Intercept)", 1] + sum2$coeff["cre.volumeL1", 1]*shocks1$volE2[i] + sum2$coeff["cre.priceL1", 1]*shocks1$priE2[i]
+
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shocks1, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+####Gráfica
+```{r}
+sh1Melt <- melt(shocks1[,1:5], id.vars = "index")
+ggplot(sh1Melt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+##Segunda Parte  
+###1)Estimación  
+$y_{1t}=c_1+\beta_{11}y_{1t-1}+\beta_{12}y_{2t-1}+\delta_{11}y_{1t-2}+\delta_{12}y_{2t-2}+\epsilon{1t}$  
+$y_{2t}=c_2+\beta_{21}y_{1t-1}+\beta_{22}y_{2t-1}+\delta_{21}y_{1t-2}+\delta_{22}y_{2t-2}+\epsilon{2t}$
+
+```{r}
+fit3 <- lm(cre.volume ~ cre.volumeL1 + cre.priceL1 + cre.volumeL2 + cre.priceL2, data = btc)
+fit4 <- lm(cre.price ~ cre.volumeL1 + cre.priceL1 + cre.volumeL2 + cre.priceL2, btc)
+
+summary(fit3)
+summary(fit4)
+```
+###2) Quién afecta a quién?
+$H_0:\beta_{12}=\delta_{12}=0$  
+$\beta_{12}$ sí es significativa pero $\delta_{12}$ no lo es  
+$H_0:\beta_{21}=\delta_{21}=0$  
+Ni $\beta_{21}$ o $\delta_{21}$ son significativas
+
+###3) Respuesta a los shocks
+####a) Shocks del volumen  
+$y_{1T+1}= \sigma_1, y_{2T+1}=0$
+```{r}
+sum3 <- summary(fit3) 
+varFit3 <- sum3$sigma
+##varFit3 <- sqrt(mean(sum3$residuals^2))
+sum4 <- summary(fit4) 
+varFit4 <- sum4$sigma
+##varFit4 <- sqrt(mean(sum4$residuals^2))
+```
+
+```{r}
+shockSig2 <- data.frame(volE = c(tail(btc$cre.volume, 1), varFit3), priE = c(tail(btc$cre.price, 1), 0), volE2 = c(tail(btc$cre.volume, 1), 0), priE2 = c(tail(btc$cre.price, 1), varFit4), index = c(1, 2))
+no <- 10
+for (i in 1:no) {
+shockSig2[i+2, "volE"] <- sum3$coeff["(Intercept)", 1] + 
+  sum3$coeff["cre.volumeL1", 1]*shockSig2$volE[i+1] + sum3$coeff["cre.priceL1", 1]*shockSig2$priE[i+1] + 
+  sum3$coeff["cre.volumeL2", 1]*shockSig2$volE[i] + sum3$coeff["cre.priceL2", 1]*shockSig2$priE[i]
+
+shockSig2[i+2, "priE"] <- sum4$coeff["(Intercept)", 1] + sum4$coeff["cre.volumeL1", 1]*shockSig2$volE[i+1] + sum4$coeff["cre.priceL1", 1]*shockSig2$priE[i+1] + sum4$coeff["cre.volumeL2", 1]*shockSig2$volE[i] + sum4$coeff["cre.priceL2", 1]*shockSig2$priE[i]
+
+shockSig2$index[i+2] <-i+2
+}
+```
+
+####b) Shocks del precio  
+$y_{1T+1}= 0, y_{2T+1}=\sigma_2$  
+```{r}
+for (i in 1:no) {
+shockSig2[i+2, "volE2"] <- sum3$coeff["(Intercept)", 1] + sum3$coeff["cre.volumeL1", 1]*shockSig2$volE2[i+1] + sum3$coeff["cre.priceL1", 1]*shockSig2$priE2[i+1] + sum3$coeff["cre.volumeL2", 1]*shockSig2$volE2[i] + sum3$coeff["cre.priceL2", 1]*shockSig2$priE2[i]
+
+shockSig2[i+2, "priE2"] <- sum4$coeff["(Intercept)", 1] + sum4$coeff["cre.volumeL1", 1]*shockSig2$volE2[i+1] + sum4$coeff["cre.priceL1", 1]*shockSig2$priE2[i+1] + sum4$coeff["cre.volumeL2", 1]*shockSig2$volE2[i] + sum4$coeff["cre.priceL2", 1]*shockSig2$priE2[i]
+
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shockSig2, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+###4) Grafica los 4 resultados anteriors y analiza cuál efecto cruzado es mayor?
+
+```{r}
+shS2Melt <- melt(shockSig2[,1:5], id.vars = "index")
+ggplot(shS2Melt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+  
+###5) Repite el 3 y 4  
+
+####a)$y_{1T+1}= 1, y_{2T+1}= 0$
+```{r}
+shocks12 <- data.frame(volE = c(tail(btc$cre.volume, 1), 1), priE = c(tail(btc$cre.price, 1), 0), volE2 = c(tail(btc$cre.volume, 1), 0), priE2 = c(tail(btc$cre.price, 1), 1), index = c(1, 2))
+no <- 10
+for (i in 1:no) {
+shocks12[i+2, "volE"] <- sum3$coeff["(Intercept)", 1] + sum3$coeff["cre.volumeL1", 1]*shocks12$volE[i+1] + sum3$coeff["cre.priceL1", 1]*shocks12$priE[i+1] + sum3$coeff["cre.volumeL2", 1]*shocks12$volE[i] + sum3$coeff["cre.priceL2", 1]*shocks12$priE[i]
+
+shocks12[i+2, "priE"] <- sum4$coeff["(Intercept)", 1] + sum4$coeff["cre.volumeL1", 1]*shocks12$volE[i+1] + sum4$coeff["cre.priceL1", 1]*shocks12$priE[i+1] + sum4$coeff["cre.volumeL2", 1]*shocks12$volE[i] + sum4$coeff["cre.priceL2", 1]*shocks12$priE[i]
+
+shocks12$index[i+2] <-i+2
+}
+```
+
+####b)$y_{1T+1}= 1, y_{2T+1}= 1$
+```{r}
+for (i in 1:no) {
+shocks12[i+2, "volE2"] <- sum3$coeff["(Intercept)", 1] + sum3$coeff["cre.volumeL1", 1]*shocks12$volE2[i+1] + sum3$coeff["cre.priceL1", 1]*shocks12$priE2[i+1] + sum3$coeff["cre.volumeL2", 1]*shocks12$volE2[i] + sum3$coeff["cre.priceL2", 1]*shocks12$priE2[i]
+
+shocks12[i+2, "priE2"] <- sum4$coeff["(Intercept)", 1] + sum4$coeff["cre.volumeL1", 1]*shocks12$volE2[i+1] + sum4$coeff["cre.priceL1", 1]*shocks12$priE2[i+1] + sum4$coeff["cre.volumeL2", 1]*shocks12$volE2[i] + sum4$coeff["cre.priceL2", 1]*shocks12$priE2[i]
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shocks12, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+####Gráfica
+```{r}
+sh12Melt <- melt(shocks12[,1:5], id.vars = "index")
+ggplot(sh12Melt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+
+##Tercera Parte
+
+###1)Estimación  
+$y_{1t}=c_1+\beta_{11}y_{1t-1}+\beta_{12}y_{2t-1}+...+\delta_{11}y_{1t-5}+\delta_{12}y_{2t-5}+\epsilon{1t}$  
+$y_{2t}=c_2+\beta_{21}y_{1t-1}+\beta_{22}y_{2t-1}+...+\delta_{21}y_{1t-5}+\delta_{22}y_{2t-5}+\epsilon{2t}$
+
+```{r}
+fit5 <- lm(cre.volume ~ cre.volumeL1 + cre.priceL1 + cre.volumeL2 + cre.priceL2 + cre.volumeL3 + cre.priceL3 + cre.volumeL4 + cre.priceL4 + cre.volumeL5 + cre.priceL5, data = btc)
+fit6 <- lm(cre.price ~ cre.volumeL1 + cre.priceL1 + cre.volumeL2 + cre.priceL2 + cre.volumeL3 + cre.priceL3 + cre.volumeL4 + cre.priceL4 + cre.volumeL5 + cre.priceL5, data = btc)
+
+summary(fit5)
+summary(fit6)
+```
+###2) Quién afecta a quién?
+$H_0:\beta_{12}=...=\delta_{12}=0$  
+Solo el coeficiente de precio con lag 1 resultó significativo  
+$H_0:\beta_{21}=...=\delta_{21}=0$  
+Ningún coeficiente de volumen resultó significativo  
+
+###3) Respuesta a los shocks
+####a) Shocks del volumen  
+$y_{1T+1}= \sigma_1, y_{2T+1}=0$
+```{r}
+sum5 <- summary(fit5) 
+varFit5 <- sum5$sigma
+##varFit3 <- sqrt(mean(sum3$residuals^2))
+sum6 <- summary(fit6) 
+varFit6 <- sum6$sigma
+##varFit4 <- sqrt(mean(sum4$residuals^2))
+```
+
+```{r}
+shockSig3 <- data.frame(volE = c(tail(btc$cre.volume, 4), varFit5), priE = c(tail(btc$cre.price, 4), 0), volE2 = c(tail(btc$cre.volume, 4), 0), priE2 = c(tail(btc$cre.price, 4), varFit6), index = c(1:5))
+no <- 10
+for (i in 1:no) {
+shockSig3[i+5, "volE"] <- sum5$coeff["(Intercept)", 1] + 
+  sum5$coeff["cre.volumeL1", 1]*shockSig3$volE[i+4] + sum5$coeff["cre.priceL1", 1]*shockSig3$priE[i+4] + 
+  sum5$coeff["cre.volumeL2", 1]*shockSig3$volE[i+3] + sum5$coeff["cre.priceL2", 1]*shockSig3$priE[i+3] +
+  sum5$coeff["cre.volumeL3", 1]*shockSig3$volE[i+2] + sum5$coeff["cre.priceL3", 1]*shockSig3$priE[i+2] +
+  sum5$coeff["cre.volumeL4", 1]*shockSig3$volE[i+1] + sum5$coeff["cre.priceL4", 1]*shockSig3$priE[i+1] +
+  sum5$coeff["cre.volumeL5", 1]*shockSig3$volE[i] + sum5$coeff["cre.priceL5", 1]*shockSig3$priE[i]
+  
+shockSig3[i+5, "priE"] <- sum6$coeff["(Intercept)", 1] + 
+  sum6$coeff["cre.volumeL1", 1]*shockSig3$volE[i+4] + sum6$coeff["cre.priceL1", 1]*shockSig3$priE[i+4] + 
+  sum6$coeff["cre.volumeL2", 1]*shockSig3$volE[i+3] + sum6$coeff["cre.priceL2", 1]*shockSig3$priE[i+3] +
+  sum6$coeff["cre.volumeL3", 1]*shockSig3$volE[i+2] + sum6$coeff["cre.priceL3", 1]*shockSig3$priE[i+2] +
+  sum6$coeff["cre.volumeL4", 1]*shockSig3$volE[i+1] + sum6$coeff["cre.priceL4", 1]*shockSig3$priE[i+1] +
+  sum6$coeff["cre.volumeL5", 1]*shockSig3$volE[i] + sum6$coeff["cre.priceL5", 1]*shockSig3$priE[i]
+
+shockSig3$index[i+5] <-i+5
+}
+```
+
+####b) Shocks del precio  
+$y_{1T+1}= 0, y_{2T+1}=\sigma_2$  
+```{r}
+for (i in 1:no) {
+shockSig3[i+5, "volE2"] <- sum5$coeff["(Intercept)", 1] + 
+  sum5$coeff["cre.volumeL1", 1]*shockSig3$volE2[i+4] + sum5$coeff["cre.priceL1", 1]*shockSig3$priE2[i+4] + 
+  sum5$coeff["cre.volumeL2", 1]*shockSig3$volE2[i+3] + sum5$coeff["cre.priceL2", 1]*shockSig3$priE2[i+3] +
+  sum5$coeff["cre.volumeL3", 1]*shockSig3$volE2[i+2] + sum5$coeff["cre.priceL3", 1]*shockSig3$priE2[i+2] +
+  sum5$coeff["cre.volumeL4", 1]*shockSig3$volE2[i+1] + sum5$coeff["cre.priceL4", 1]*shockSig3$priE2[i+1] +
+  sum5$coeff["cre.volumeL5", 1]*shockSig3$volE2[i] + sum5$coeff["cre.priceL5", 1]*shockSig3$priE2[i]
+  
+shockSig3[i+5, "priE2"] <- sum6$coeff["(Intercept)", 1] + 
+  sum6$coeff["cre.volumeL1", 1]*shockSig3$volE2[i+4] + sum6$coeff["cre.priceL1", 1]*shockSig3$priE2[i+4] + 
+  sum6$coeff["cre.volumeL2", 1]*shockSig3$volE2[i+3] + sum6$coeff["cre.priceL2", 1]*shockSig3$priE2[i+3] +
+  sum6$coeff["cre.volumeL3", 1]*shockSig3$volE2[i+2] + sum6$coeff["cre.priceL3", 1]*shockSig3$priE2[i+2] +
+  sum6$coeff["cre.volumeL4", 1]*shockSig3$volE2[i+1] + sum6$coeff["cre.priceL4", 1]*shockSig3$priE2[i+1] +
+  sum6$coeff["cre.volumeL5", 1]*shockSig3$volE2[i] + sum6$coeff["cre.priceL5", 1]*shockSig3$priE2[i]
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shockSig3, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+###4) Grafica los 4 resultados anteriors y analiza cuál efecto cruzado es mayor?
+
+```{r}
+shS3Melt <- melt(shockSig3[,1:5], id.vars = "index")
+ggplot(shS3Melt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+  
+###5) Repite el 3 y 4  
+
+####a)$y_{1T+1}= 1, y_{2T+1}= 0$
+```{r}
+shocks13 <- data.frame(volE = c(tail(btc$cre.volume, 4), 1), priE = c(tail(btc$cre.price, 4), 0), volE2 = c(tail(btc$cre.volume, 4), 0), priE2 = c(tail(btc$cre.price, 4), 1), index = c(1:5))
+no <- 10
+for (i in 1:no) {
+shocks13[i+5, "volE"] <- sum5$coeff["(Intercept)", 1] + 
+  sum5$coeff["cre.volumeL1", 1]*shocks13$volE[i+4] + sum5$coeff["cre.priceL1", 1]*shocks13$priE[i+4] + 
+  sum5$coeff["cre.volumeL2", 1]*shocks13$volE[i+3] + sum5$coeff["cre.priceL2", 1]*shocks13$priE[i+3] +
+  sum5$coeff["cre.volumeL3", 1]*shocks13$volE[i+2] + sum5$coeff["cre.priceL3", 1]*shocks13$priE[i+2] +
+  sum5$coeff["cre.volumeL4", 1]*shocks13$volE[i+1] + sum5$coeff["cre.priceL4", 1]*shocks13$priE[i+1] +
+  sum5$coeff["cre.volumeL5", 1]*shocks13$volE[i] + sum5$coeff["cre.priceL5", 1]*shocks13$priE[i]
+  
+shocks13[i+5, "priE"] <- sum6$coeff["(Intercept)", 1] + 
+  sum6$coeff["cre.volumeL1", 1]*shocks13$volE[i+4] + sum6$coeff["cre.priceL1", 1]*shocks13$priE[i+4] + 
+  sum6$coeff["cre.volumeL2", 1]*shocks13$volE[i+3] + sum6$coeff["cre.priceL2", 1]*shocks13$priE[i+3] +
+  sum6$coeff["cre.volumeL3", 1]*shocks13$volE[i+2] + sum6$coeff["cre.priceL3", 1]*shocks13$priE[i+2] +
+  sum6$coeff["cre.volumeL4", 1]*shocks13$volE[i+1] + sum6$coeff["cre.priceL4", 1]*shocks13$priE[i+1] +
+  sum6$coeff["cre.volumeL5", 1]*shocks13$volE[i] + sum6$coeff["cre.priceL5", 1]*shocks13$priE[i]
+
+shocks13$index[i+5] <-i+5
+}
+```
+
+####b)$y_{1T+1}= 1, y_{2T+1}= 1$
+```{r}
+for (i in 1:no) {
+shocks13[i+5, "volE2"] <- sum5$coeff["(Intercept)", 1] + 
+  sum5$coeff["cre.volumeL1", 1]*shocks13$volE2[i+4] + sum5$coeff["cre.priceL1", 1]*shocks13$priE2[i+4] + 
+  sum5$coeff["cre.volumeL2", 1]*shocks13$volE2[i+3] + sum5$coeff["cre.priceL2", 1]*shocks13$priE2[i+3] +
+  sum5$coeff["cre.volumeL3", 1]*shocks13$volE2[i+2] + sum5$coeff["cre.priceL3", 1]*shocks13$priE2[i+2] +
+  sum5$coeff["cre.volumeL4", 1]*shocks13$volE2[i+1] + sum5$coeff["cre.priceL4", 1]*shocks13$priE2[i+1] +
+  sum5$coeff["cre.volumeL5", 1]*shocks13$volE2[i] + sum5$coeff["cre.priceL5", 1]*shocks13$priE2[i]
+  
+shocks13[i+5, "priE2"] <- sum6$coeff["(Intercept)", 1] + 
+  sum6$coeff["cre.volumeL1", 1]*shocks13$volE2[i+4] + sum6$coeff["cre.priceL1", 1]*shocks13$priE2[i+4] + 
+  sum6$coeff["cre.volumeL2", 1]*shocks13$volE2[i+3] + sum6$coeff["cre.priceL2", 1]*shocks13$priE2[i+3] +
+  sum6$coeff["cre.volumeL3", 1]*shocks13$volE2[i+2] + sum6$coeff["cre.priceL3", 1]*shocks13$priE2[i+2] +
+  sum6$coeff["cre.volumeL4", 1]*shocks13$volE2[i+1] + sum6$coeff["cre.priceL4", 1]*shocks13$priE2[i+1] +
+  sum6$coeff["cre.volumeL5", 1]*shocks13$volE2[i] + sum6$coeff["cre.priceL5", 1]*shocks13$priE2[i]
+}
+```
+####Tabla de respuestas a los shocks
+```{r}
+  kable(shocks13, escape = F) %>%
+  kable_styling("hover", full_width = F) %>%
+  column_spec(5, width = "4cm") %>%
+  add_header_above(c("Shocks Volumen" = 2, "Shocks Precio" = 2, ""))
+```
+####Gráfica
+```{r}
+sh13Melt <- melt(shocks13[,1:5], id.vars = "index")
+ggplot(sh13Melt, aes(x = index, y = value, color = variable))+
+  geom_line(size=1.1, alpha=0.7)+
+  scale_color_tableau("Tableau 10")+
+  theme_hc()+
+  theme(legend.position = "right")
+```
+
+##¿Cómo afecta un shock aleatorio de una variable endógena a la otra?
+.  
+.  
+.  
+.  
+.  
+.  
+.  
+
+
+
+
+
+
+
+
